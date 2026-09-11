@@ -1,6 +1,6 @@
 # bundlr-solana — Project Guide
 
-Solana port of the Bundlr library (curated baskets of tokenized stocks, gold, crypto, T-bills and Kalshi outcome tokens), built 2026-09-11 for the Colosseum Crypto World's Fair hackathon (Sept 14 – Oct 12, 2026). Sibling of `Projects/bundlr` (strategy home; read its `AGENTS.md` for product rules — cash path, fee language, copy SOP, never "sit on top of" anyone). This repo is public on GitHub as `Bundlr-trade/Bundlr.SOL`; nothing private goes in it. It is a hackathon fork: nothing here flows back into the Robinhood Chain product (`Projects/bundlr`, `bundlr-frontend`, `app_MVP`).
+Solana port of the Bundlr library (curated baskets of tokenized stocks, gold, crypto, T-bills and Kalshi outcome tokens), built 2026-09-11 for Stocklana, the Solana Foundation one-week stocks hackathon (Sept 11 – 18, 2026, hackathons.solana.com/hackathons/stocklana); Colosseum has said Stocklana submissions are also eligible for Crypto World's Fair prizes (deadline Oct 12). Sibling of `Projects/bundlr` (strategy home; read its `AGENTS.md` for product rules — cash path, fee language, copy SOP, never "sit on top of" anyone). This repo is public on GitHub as `Bundlr-trade/Bundlr.SOL`; nothing private goes in it. It is a hackathon fork: nothing here flows back into the Robinhood Chain product (`Projects/bundlr`, `bundlr-frontend`, `app_MVP`).
 
 ## Layout
 

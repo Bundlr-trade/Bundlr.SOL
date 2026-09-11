@@ -1,6 +1,6 @@
 # bundlr on Solana
 
-**One market, one chain.** Bundlr lets any curator — a person or an agent — turn a view into a basket in one click: tokenized stocks, gold, crypto, T-bills and Kalshi event contracts, side by side, minted as one token that is backed 1:1 by what it holds and redeemable at NAV. This repo is the Bundlr library rebuilt for Solana for the Colosseum Crypto World's Fair (Sept 14 – Oct 12, 2026).
+**One market, one chain.** Bundlr lets any curator — a person or an agent — turn a view into a basket in one click: tokenized stocks, gold, crypto, T-bills and Kalshi event contracts, side by side, minted as one token that is backed 1:1 by what it holds and redeemable at NAV. This repo is the Bundlr library rebuilt for Solana for Stocklana, the Solana Foundation's one-week stocks hackathon (Sept 11 – 18, 2026).
 
 Open `library/library-finder.html` in a browser. No server, no wallet. Everything on screen is live.
 
