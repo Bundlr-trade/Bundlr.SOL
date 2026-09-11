@@ -1,0 +1,117 @@
+{
+ "_about": "Solana settlement rails. One launch chain. settleable.ts re-checks every mint on-chain (owner program, decimals, freeze authority via getMultipleAccounts) and quotes depth through Jupiter's swap quote at $1K / $10K / $50K / $250K in USDC, so an entry here is a claim it will test, not a fact it trusts. Mint addresses come from CoinGecko's platform map or the issuer's own docs — never typed from memory.",
+ "chains": {
+  "Solana": {
+   "rpc": "https://api.mainnet-beta.solana.com",
+   "explorer": "https://solscan.io/token/",
+   "quote": "USDC",
+   "quoter": "jupiter-swap-v1",
+   "quoteUrl": "https://lite-api.jup.ag/swap/v1/quote",
+   "priceUrl": "https://lite-api.jup.ag/price/v3",
+   "launch": true,
+   "note": "Solana mainnet-beta. Tokens are SPL Token or Token-2022 mints (tokenized stocks and Kalshi outcome tokens are Token-2022). Depth is Jupiter's aggregated route across Raydium, Meteora, Orca, Byreal and the RFQ venues; priceImpactPct is Jupiter's own figure for the route. Public RPC is rate-limited; the scripts batch 100 mints per call and pace requests."
+  }
+ },
+ "quoteTokens": {
+  "Solana": {
+   "USDC": {
+    "addr": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "decimals": 6
+   }
+  }
+ },
+ "aliases": {
+  "_about": "registry ticker -> the Solana mint that settles it. BTC settles as cbBTC (Coinbase-custodied wrapped BTC, native Solana mint); ETH as Wormhole-wrapped ETH; the COMEX gold row GC as XAUT0 (Tether Gold, omnichain via LayerZero, redeemable for LBMA bars).",
+  "BTC": "cbBTC",
+  "ETH": "WETH",
+  "GC": "XAUT0"
+ },
+ "rails": [
+  {
+   "t": "cbBTC",
+   "chain": "Solana",
+   "addr": "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",
+   "decimals": 8,
+   "issuer": "Coinbase (cbBTC, 1:1 BTC in Coinbase custody)",
+   "restrictions": "none",
+   "verified": "2026-09-11",
+   "source": "CoinGecko coins/list platforms.solana for coinbase-wrapped-btc; re-checked on-chain by settleable.ts"
+  },
+  {
+   "t": "WETH",
+   "chain": "Solana",
+   "addr": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+   "decimals": 8,
+   "issuer": "Wormhole (Portal) wrapped ETH",
+   "restrictions": "none",
+   "verified": "2026-09-11",
+   "source": "CoinGecko coins/list platforms.solana for ethereum-wormhole; re-checked on-chain by settleable.ts"
+  },
+  {
+   "t": "XAUT0",
+   "chain": "Solana",
+   "addr": "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P",
+   "decimals": 6,
+   "issuer": "Tether Gold (TG Commodities) via LayerZero OFT — one token = one troy ounce of LBMA gold",
+   "restrictions": "redemption for bars via Tether, minimums apply; secondary market is open",
+   "verified": "2026-09-11",
+   "source": "CoinGecko coins/tether-gold-tokens platforms.solana; re-checked on-chain by settleable.ts"
+  },
+  {
+   "t": "USDC",
+   "chain": "Solana",
+   "addr": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+   "decimals": 6,
+   "issuer": "Circle (native Solana USDC)",
+   "restrictions": "none",
+   "isQuote": true,
+   "verified": "2026-09-11",
+   "source": "Circle developer docs; re-checked on-chain by settleable.ts"
+  }
+ ],
+ "classRules": {
+  "_about": "Rows with no hand entry fall through to these, so the reason is legible on the row.",
+  "stocks:Backed xStocks": {
+   "chain": "Solana",
+   "status": "byDepth",
+   "fromRegistry": true,
+   "gate": null,
+   "note": "xStock (Backed Assets (JE) Ltd; Token-2022, 8 dec). Fully backed tracker certificates; secondary trading on Solana is permissionless, primary issuance is KYC'd and ex-US. Depth is Jupiter's route (Raydium CLMM, Byreal, Riptide, BinaryFi…)."
+  },
+  "stocks:Ondo Global Markets": {
+   "chain": "Solana",
+   "status": "gated",
+   "fromRegistry": true,
+   "gate": "primary: mint/redeem at NAV through the Ondo Stocks API (attestation-signed, whitelisted non-US address); Jupiter shows no route for most tickers",
+   "note": "Ondo Global Markets token (Ondo Global Markets (BVI) Ltd; Token-2022, 9 dec). 1:1 backed structured notes, Chainlink price feeds, daily attestations. Liquidity is primary — the protocol would source from the issuer, so secondary depth is the wrong gate."
+  },
+  "predictions": {
+   "chain": "Solana",
+   "status": "tokenizable",
+   "as": "Kalshi YES / NO outcome token (Token-2022, minted by DFlow)",
+   "venue": "Kalshi order book via DFlow CLP",
+   "note": "Every Kalshi market is reachable as a Solana SPL pair through DFlow's Prediction Markets API: a /order from USDC to the YES or NO mint tokenizes the market on first trade if it is not already initialized. Pre-minted yesMint/noMint addresses come from the DFlow metadata API (production key). Winning tokens redeem for USDC after resolution."
+  },
+  "commodities": {
+   "chain": null,
+   "status": "none",
+   "note": "futures contract; no token exists on any chain. Gold settles as XAUT0 (alias) and the GLD / SLV / PPLT / PALL tokenized ETFs sit on the Stocks shelf."
+  },
+  "crypto": {
+   "chain": null,
+   "status": "none",
+   "note": "no Solana mint on CoinGecko's platform map for this asset"
+  },
+  "currencies": {
+   "chain": null,
+   "status": "none",
+   "note": "no Solana-native issuance (EURC is native on Solana; the rest are not)"
+  }
+ },
+ "thresholds": {
+  "_about": "price impact is Jupiter's priceImpactPct for the route, as a fraction. Rows under minLiqToQuote of pooled liquidity (Jupiter price v3) are marked thin without a quote.",
+  "liveMaxImpactAt50k": 0.01,
+  "sizesUsd": [1000, 10000, 50000, 250000],
+  "minLiqToQuote": 10000
+ }
+}

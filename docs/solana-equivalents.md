@@ -1,0 +1,32 @@
+# EVM → Solana: what each piece became
+
+Bundlr's library was built for Robinhood Chain and Arbitrum One (EVM). This repo ports it to a single launch chain, Solana. The table is the whole refactor in one page: every EVM dependency, the Solana equivalent we found, and how the code uses it. Nothing below is assumed; each rail is re-read on-chain and quoted before the library calls it live.
+
+| EVM library (Robinhood Chain / Arbitrum One) | Solana edition | Where in this repo |
+|---|---|---|
+| **Launch chains**: Robinhood Chain (Arbitrum Orbit L2, USDG quote) + Arbitrum One (USDC quote); Ethereum quoted, not launch | **Solana mainnet-beta**, USDC quote (`EPjF…Dt1v`) | `library/registry/rails.json` → `chains.Solana` |
+| **Token standard**: ERC-20 (+ Robinhood's ERC-8056 `uiMultiplier`) | **SPL Token** for majors and stables, **Token-2022** for tokenized stocks, tokenized gold and Kalshi outcome tokens (transfer hooks / permanent delegate live in the mint's TLV extensions) | `settleable.ts` reads the mint account: owner program, decimals, freeze authority |
+| **Token verification**: `eth_call` → `symbol()` / `decimals()` | `getMultipleAccounts` (100 mints per call) → decode the 82-byte Mint layout | `settleable.ts` `readMints()` |
+| **Depth oracle**: Uniswap v3 QuoterV2 `quoteExactInput`, direct and via WETH, four fee tiers | **Jupiter Swap API** `GET /swap/v1/quote` (USDC → mint) at $1K / $10K / $50K / $250K; Jupiter's own `priceImpactPct` and route labels (Raydium CLMM, Meteora, Orca, Byreal, RFQ venues) | `settleable.ts` `jupQuote()` / `depth()` |
+| **Liquidity pre-gate**: CoinGecko 24h volume ≥ $100K | **Jupiter Price API v3** `liquidity` (pooled USD across every venue Jupiter routes) ≥ $100K = mintable, else thin; rows under $10K are marked thin without spending a quote | `build-registry.ts` `STOCK_LIQ_FLOOR`, `rails.json` `thresholds.minLiqToQuote` |
+| **Tokenized stocks**: Robinhood Stock Tokens (252, gated on counsel) · Dinari dShares on Arbitrum (271, gated) · Backed xStocks listed but no verified Arbitrum address (741, no rail) | **Backed xStocks** (Token-2022, permissionless secondary on Solana, quoted on Jupiter) · **Ondo Global Markets** (Token-2022, 450 tickers, primary mint/redeem at NAV via the Ondo Stocks API, so `gated · primary` like Dinari was) | `build-registry.ts` `buildStocks()`; class rules in `rails.json` |
+| **Underlying reference price**: Yahoo Finance relay | Jupiter Price v3 returns `stockData.price` for tokenized stocks, so the preview prints the on-chain premium vs the share | `build-registry.ts` (`jup.stock`, `premium`), finder preview "underlying" row |
+| **Gold**: GC alias → PAXG (Ethereum/Arbitrum); no gold rail on Arbitrum One | GC alias → **XAUT0** (Tether Gold, native Solana mint via LayerZero); GLDx (xStocks) and GLDon / SLVon / PPLTon / PALLon (Ondo) on the ETF shelf | `rails.json` `aliases.GC`, `rails[XAUT0]` |
+| **BTC / ETH**: WBTC / WETH on Arbitrum | **cbBTC** (Coinbase-custodied, native Solana mint) / **WETH** (Wormhole Portal) | `rails.json` `aliases`, `rails[cbBTC]`, `rails[WETH]` |
+| **Stables & T-bills**: USDC, USDT, USDG, USDY, BUIDL… on Arbitrum/Ethereum | Same names, Solana mints from CoinGecko's platform map: USDC, USDT, PYUSD, USDG, USDY, OUSG, BUIDL, USTB, TBILL, USYC, EURC | `build-registry.ts` `buildCrypto()` / `buildCurrencies()` |
+| **Predictions**: Polymarket (Gamma API + CLOB), Polygon CTF ERC-1155 outcome tokens, "phase 3" (needed an ERC-20 wrapper + bridge before a bundle could hold one) | **Kalshi**, tokenized on Solana by **DFlow**: every market is a YES / NO Token-2022 pair, minted on the first `/order` (USDC → outcome mint) if not already initialized; redeems to USDC at resolution. Metadata + odds from Kalshi's public trade API; mint addresses from DFlow's metadata API (production key) | `build-registry.ts` `buildPredictions()`, `rails.json` `classRules.predictions` |
+| **Prediction odds feed**: Polymarket CLOB midpoints (REST + websocket, CORS open) | Kalshi last trade / bid-ask mid through the `library-kalshi` relay (Kalshi refuses browser requests), 20s | finder `refreshKalshi()` |
+| **Live marks**: CoinGecko, Yahoo relay, Coinbase websocket | Same, plus **Jupiter Price v3** as the on-chain mark for every row with a Solana mint (what a Zap actually pays) | finder `refreshJupiter()` |
+| **Block explorer**: Arbiscan / Blockscout / Robinscan | **Solscan** `https://solscan.io/token/<mint>` | `rails.json`, `resolve-links.ts` |
+| **Bundle contract**: `Bundle.sol` settlement layer + factory + Zap (Uniswap-routed, 10 bps) | **Bundle program** (Anchor): Token-2022 bundle mint with a PDA mint authority, one program-owned vault per leg, `mint` / `redeem` against pro-rata vault balances; the **Zap** composes Jupiter `swap-instructions` for each leg + the deposit + the bundle mint into one transaction | `docs/bundle-program.md` (design), `zap/quote-basket.ts` (the Zap's read side, runnable now) |
+| **Cross-chain cash in**: Across / MoonPay → USDG on Robinhood Chain | Card / Apple Pay on-ramp → USDC on Solana (MoonPay, Coinbase Onramp, Stripe all settle USDC-SPL); no bridge step | README "what changes for the cash path" |
+
+## What did not need to change
+
+The library itself: departments, shelves, smart folders, kin, the 3×3 bench, stacks-as-weights, lint, the quantity ticket, the sourcing receipt, positions, the NAV math (launch quantities × live marks, net of the 0.75%/yr accrual and 10 bps each way), the Wikipedia / Wikidata / CoinGecko resolvers, the logo pipeline, and the prompt → draft relay. Those were already chain-agnostic; the chain lived in `rails.json`, `settleable.ts`, and the last hundred lines of the mock.
+
+## What is honestly not done
+
+- **DFlow mint addresses.** DFlow's development metadata host did not resolve from the build machine and the production host needs an API key, so prediction rows carry the rail as `tokenizable` (the pair exists the moment anyone orders) rather than a verified `yesMint` / `noMint`. `settleable.ts` has the hook; drop a `DFLOW_API_KEY` in and it fills them.
+- **The Bundle program is a design, not a deployment.** No Anchor toolchain on the build machine; the doc specifies accounts and instructions and the Zap quoter shows the sourcing math against live Jupiter routes.
+- **Ondo Global Markets depth.** Jupiter has no route for most Ondo tickers because their liquidity is primary (mint/redeem at NAV through Ondo's API). They are `gated · primary` on purpose, the way Dinari was on Arbitrum.
