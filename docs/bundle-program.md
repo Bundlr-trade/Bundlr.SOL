@@ -27,6 +27,9 @@ Status: **design, not deployed.** The EVM side shipped `Bundle.sol` (settlement 
 
 ## The Zap (off-chain composer)
 
+> **Superseded 2026-09-24** by `zap-escrow-spec-2026-09-24.md`: the Zap is now an on-chain escrow program (`open` → `fill` per leg → `finish`, cancel after a deadline) because a five-leg basket does not fit in one transaction. The paragraph below is the original single-transaction sketch, kept for the record.
+
+
 For `mint`: `quote-basket.ts` → Jupiter `/swap-instructions` per leg (destination = buyer ATA, `wrapAndUnwrapSol`) → `snapshot` → swaps → `transfer_checked` × n → `mint`. Address lookup tables from Jupiter keep the transaction under the 1 232-byte limit for up to ~5 legs; 6–9 legs use a two-transaction flow guarded by a `pending_mint` escrow PDA (buyer's USDC held until the second transaction completes or expires).
 
 Kalshi legs: the Jupiter swap is replaced by a DFlow `/order` (USDC → YES or NO mint) in the same slot; the outcome mint is Token-2022 and sits in a vault like any other leg. After resolution `redeem` releases the outcome token and the holder redeems it for USDC with DFlow.
