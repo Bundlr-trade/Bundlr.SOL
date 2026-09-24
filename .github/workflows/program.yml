@@ -27,6 +27,11 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install system deps (libudev, for anchor-cli's hidapi/ledger support)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev pkg-config
+
       - name: Cache cargo + anchor-cli binary
         uses: actions/cache@v4
         with:
