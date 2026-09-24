@@ -65,7 +65,3 @@ Nothing is typed from memory. Mint addresses come from CoinGecko's platform map 
 - The Bundle program is a design (`docs/bundle-program.md`), not a deployment. `Bundle.sol` and the testnet Zap exist on the EVM side; this is the Anchor spec that replaces them.
 - Ondo Global Markets rows are gated because their liquidity is primary; Jupiter has no route for most of them today.
 - Kalshi's API refuses browser requests, so odds go through a small relay; Kalshi history is not browser-reachable, so prediction legs sit out of the 30-day backtest.
-
-## Lineage
-
-Ported from the Bundlr curator-studio library (EVM). The departments, shelves, smart folders, bench, lint, NAV math, resolvers and logo pipeline are unchanged; the chain layer (`rails.json`, `settleable.ts`, the price feeds and the rail copy in the mock) is new. Team: Jon, Milos, Daniel.
