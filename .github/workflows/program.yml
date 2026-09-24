@@ -11,7 +11,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  ANCHOR_VERSION: "0.32.0"
+  ANCHOR_VERSION: "0.32.2"
   SOLANA_CLI_VERSION: "2.1.21"
   NODE_VERSION: "20.18.0"
 
@@ -24,23 +24,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache cargo
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + anchor-cli binary
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin/anchor
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-anchor${{ env.ANCHOR_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-anchor${{ env.ANCHOR_VERSION }}-
             ${{ runner.os }}-cargo-
 
-      - name: Setup Anchor (rust + solana + anchor-cli)
-        uses: metadaoproject/setup-anchor@v3.3
-        with:
-          anchor-version: ${{ env.ANCHOR_VERSION }}
-          solana-cli-version: ${{ env.SOLANA_CLI_VERSION }}
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Solana CLI (Agave)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_CLI_VERSION }}/install)"
+          echo "/home/runner/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install anchor-cli (cached above; only compiles on a cache miss)
+        run: |
+          if ! command -v anchor >/dev/null 2>&1 || [ "$(anchor --version 2>/dev/null)" != "anchor-cli ${{ env.ANCHOR_VERSION }}" ]; then
+            cargo install --locked anchor-cli --version ${{ env.ANCHOR_VERSION }} --force
+          fi
+          anchor --version
 
       - name: Ensure a default CLI wallet exists (anchor build reads Anchor.toml's provider.wallet)
         run: |
@@ -76,12 +86,10 @@ jobs:
           mkdir -p target/deploy target/idl target/types
           find target -maxdepth 1 -iname "*.so" -exec mv {} target/deploy/ \; || true
 
-      - name: Setup Solana CLI
-        uses: metadaoproject/setup-anchor@v3.3
-        with:
-          anchor-version: ${{ env.ANCHOR_VERSION }}
-          solana-cli-version: ${{ env.SOLANA_CLI_VERSION }}
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Solana CLI (Agave)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_CLI_VERSION }}/install)"
+          echo "/home/runner/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Set up bun
         uses: oven-sh/setup-bun@v2
