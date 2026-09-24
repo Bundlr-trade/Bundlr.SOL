@@ -12,7 +12,10 @@ on:
 
 env:
   ANCHOR_VERSION: "0.32.2"
-  SOLANA_CLI_VERSION: "2.1.21"
+  # 2.1.x's bundled platform-tools ships rustc 1.84, too old for some
+  # transitive deps (edition2024). 4.2.x bundles platform-tools with a
+  # much newer rustc while remaining anchor 0.32-compatible.
+  SOLANA_CLI_VERSION: "4.2.2"
   NODE_VERSION: "20.18.0"
 
 permissions:
@@ -61,6 +64,12 @@ jobs:
         run: |
           mkdir -p ~/.config/solana
           [ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
+
+      - name: Place the program keypair so anchor's key-sync doesn't mint a new program id
+        run: |
+          mkdir -p target/deploy
+          printf '%s' '${{ secrets.PROGRAM_KEYPAIR }}' > target/deploy/bundle-keypair.json
+          solana-keygen pubkey target/deploy/bundle-keypair.json
 
       - name: anchor build
         run: anchor build
