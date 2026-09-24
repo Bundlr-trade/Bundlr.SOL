@@ -7,7 +7,23 @@ Solana port of the Bundlr library (curated baskets of tokenized stocks, gold, cr
 - `library/library-finder.html` — the self-contained finder mock (registry + logos inlined). Open from disk. Ported from `Projects/bundlr/curator-studio/library-finder-mock.html` with the chain layer swapped: Jupiter marks, Kalshi odds via the `library-kalshi?lib=solana` relay, Solscan links, Token-2022 facts on the preview and bundle page.
 - `library/registry/` — `build-registry.ts` (Solana-first sources), `rails.json` (one chain, aliases, class rules), `settleable.ts` (RPC mint check + Jupiter depth), the chain-agnostic resolvers copied from curator-studio, `inline.ts`, `registry.json` (source of truth) / `registry.js` (mirror the mock reads), `rails-report.md`.
 - `zap/quote-basket.ts` — the Zap's read side: live Jupiter sourcing receipt for a basket, optional unsigned swap instructions with `--user`.
-- `docs/solana-equivalents.md` — the EVM → Solana mapping table, one row per dependency. `docs/bundle-program.md` — Anchor program design (not deployed).
+- `docs/solana-equivalents.md` — the EVM → Solana mapping table, one row per dependency. `docs/bundle-program.md` — Anchor program design.
+- `programs/bundle/` — the Anchor program (`create_bundle`, `issue`, `redeem`, `faucet`). `Anchor.toml` + root `Cargo.toml` live at repo root; `idl/` holds the last CI-built IDL + generated TS types. `devnet/` — hand-encoded TS client (`bundle-client.ts`, no Anchor runtime) plus `setup-mocks.ts` and `e2e.ts` for devnet dry runs.
+
+## Building and deploying
+
+The program has never built locally on this box (no cargo/rustc/solana CLI here, and the `anchor` binary fails on this box's glibc) — the only build path is GitHub Actions, `.github/workflows/program.yml`:
+
+- **Trigger**: push to `main` touching `programs/**`, `Anchor.toml`, `Cargo.toml`, or the workflow itself; also `workflow_dispatch`.
+- **`build` job**: installs rust + Solana CLI (Agave) + anchor-cli 0.32 via `metadaoproject/setup-anchor@v3.3`, runs `anchor build`, uploads the `.so`, `target/idl/*.json`, and `target/types/*.ts` as the `bundle-program-artifacts` artifact.
+- **`deploy` job**: downloads that artifact, writes the `PROGRAM_KEYPAIR` and `DEPLOYER_KEYPAIR` secrets to files, airdrops devnet SOL to the deployer (retries — the devnet faucet is flaky; if it never funds the deployer, the job logs a warning and skips deploy/e2e rather than failing the run), runs `solana program deploy` with `--program-id` set to the program keypair, then `bun devnet/setup-mocks.ts` and `bun devnet/e2e.ts` against devnet. Prints the program ID and explorer/Solscan links to the job summary.
+- **`commit-idl` job**: copies the built IDL/types into `idl/bundle.json` and `idl/bundle.ts` and commits them back to `main` (`[skip ci]`) so the frontend can import them without running Anchor.
+
+Secrets (repo settings → Actions → secrets, set via `gh secret set … -R Bundlr-trade/Bundlr.SOL`):
+- `PROGRAM_KEYPAIR` — 64-byte JSON keypair whose pubkey matches `declare_id!` in `programs/bundle/src/lib.rs` and `PROGRAM_ID` in `devnet/bundle-client.ts`. Currently `41NTbgRwNoyYUjSd9xCuf7Ny6ZUYgMxk6knq2Lpvy1RD`.
+- `DEPLOYER_KEYPAIR` — pays for deploy + devnet airdrops/faucet mints.
+
+Both keypairs are also kept locally, untracked, under `.keys/` (gitignored) — never commit a keypair. To rotate either, generate a fresh one, update `declare_id!`/`PROGRAM_ID` (for the program keypair), and re-run `gh secret set`.
 
 ## Rebuild order
 

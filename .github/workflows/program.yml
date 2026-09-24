@@ -1,0 +1,203 @@
+name: program
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "programs/**"
+      - "Anchor.toml"
+      - "Cargo.toml"
+      - ".github/workflows/program.yml"
+  workflow_dispatch: {}
+
+env:
+  ANCHOR_VERSION: "0.32.0"
+  SOLANA_CLI_VERSION: "2.1.21"
+  NODE_VERSION: "20.18.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Anchor (rust + solana + anchor-cli)
+        uses: metadaoproject/setup-anchor@v3.3
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-cli-version: ${{ env.SOLANA_CLI_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Ensure a default CLI wallet exists (anchor build reads Anchor.toml's provider.wallet)
+        run: |
+          mkdir -p ~/.config/solana
+          [ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
+
+      - name: anchor build
+        run: anchor build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-program-artifacts
+          path: |
+            target/deploy/*.so
+            target/idl/*.json
+            target/types/*.ts
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-program-artifacts
+          path: target
+
+      - name: Fix artifact layout
+        run: |
+          mkdir -p target/deploy target/idl target/types
+          find target -maxdepth 1 -iname "*.so" -exec mv {} target/deploy/ \; || true
+
+      - name: Setup Solana CLI
+        uses: metadaoproject/setup-anchor@v3.3
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-cli-version: ${{ env.SOLANA_CLI_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Write keypairs from secrets
+        run: |
+          mkdir -p .keys
+          printf '%s' '${{ secrets.PROGRAM_KEYPAIR }}' > .keys/program-keypair.json
+          printf '%s' '${{ secrets.DEPLOYER_KEYPAIR }}' > .keys/deployer-keypair.json
+          cp .keys/program-keypair.json target/deploy/bundle-keypair.json
+          solana-keygen pubkey .keys/program-keypair.json
+          solana-keygen pubkey .keys/deployer-keypair.json
+
+      - name: Configure solana CLI for devnet
+        run: |
+          solana config set --url devnet --keypair .keys/deployer-keypair.json
+
+      - name: Airdrop to deployer (devnet faucet is flaky — retry)
+        id: airdrop
+        run: |
+          set +e
+          DEPLOYER=$(solana-keygen pubkey .keys/deployer-keypair.json)
+          ok=0
+          for i in $(seq 1 8); do
+            bal=$(solana balance "$DEPLOYER" --url devnet 2>/dev/null | awk '{print $1}')
+            echo "attempt $i: balance=${bal:-0} SOL"
+            awk -v b="${bal:-0}" 'BEGIN{exit !(b+0 >= 1.5)}' && { ok=1; break; }
+            solana airdrop 1 "$DEPLOYER" --url devnet && sleep 5 || sleep $((i * 5))
+          done
+          echo "airdrop_ok=$ok" >> "$GITHUB_OUTPUT"
+          bal=$(solana balance "$DEPLOYER" --url devnet 2>/dev/null | awk '{print $1}')
+          echo "final balance: ${bal:-0} SOL"
+
+      - name: Deploy program to devnet
+        id: deploy
+        if: steps.airdrop.outputs.airdrop_ok == '1'
+        run: |
+          set +e
+          for i in 1 2 3; do
+            solana program deploy target/deploy/bundle.so \
+              --program-id target/deploy/bundle-keypair.json \
+              --keypair .keys/deployer-keypair.json \
+              --url devnet && { echo "deployed=1" >> "$GITHUB_OUTPUT"; break; }
+            echo "deploy attempt $i failed, retrying…"
+            sleep 10
+          done
+          PROGRAM_ID=$(solana-keygen pubkey target/deploy/bundle-keypair.json)
+          echo "program_id=$PROGRAM_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Skip deploy — devnet faucet unavailable
+        if: steps.airdrop.outputs.airdrop_ok != '1'
+        run: |
+          echo "::warning::devnet faucet did not fund the deployer after 8 attempts — skipping deploy and e2e. Build artifacts are still published."
+          PROGRAM_ID=$(solana-keygen pubkey target/deploy/bundle-keypair.json)
+          echo "program id (undeployed): $PROGRAM_ID"
+
+      - name: bun install (devnet client)
+        if: steps.deploy.outputs.deployed == '1'
+        working-directory: devnet
+        run: bun install
+
+      - name: Setup devnet mock mints
+        if: steps.deploy.outputs.deployed == '1'
+        env:
+          DEPLOYER_KEYPAIR: ${{ github.workspace }}/.keys/deployer-keypair.json
+          SOLANA_RPC: https://api.devnet.solana.com
+          BUNDLE_PROGRAM_ID: ${{ steps.deploy.outputs.program_id }}
+        run: bun devnet/setup-mocks.ts
+
+      - name: Run end-to-end devnet script
+        if: steps.deploy.outputs.deployed == '1'
+        env:
+          DEPLOYER_KEYPAIR: ${{ github.workspace }}/.keys/deployer-keypair.json
+          SOLANA_RPC: https://api.devnet.solana.com
+          BUNDLE_PROGRAM_ID: ${{ steps.deploy.outputs.program_id }}
+        run: bun devnet/e2e.ts
+
+      - name: Report
+        if: always()
+        run: |
+          PROGRAM_ID=$(solana-keygen pubkey target/deploy/bundle-keypair.json 2>/dev/null || echo unknown)
+          echo "### Bundle program — devnet" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Program ID: \`$PROGRAM_ID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deployed this run: ${{ steps.deploy.outputs.deployed == '1' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Explorer: https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Solscan: https://solscan.io/account/$PROGRAM_ID?cluster=devnet" >> "$GITHUB_STEP_SUMMARY"
+
+  commit-idl:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-program-artifacts
+          path: _artifacts
+
+      - name: Publish IDL + generated types into idl/
+        run: |
+          mkdir -p idl
+          find _artifacts -iname "*.json" -path "*idl*" -exec cp {} idl/bundle.json \;
+          find _artifacts -iname "*.ts" -path "*types*" -exec cp {} idl/bundle.ts \;
+          rm -rf _artifacts
+
+      - name: Commit IDL if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add idl/bundle.json idl/bundle.ts 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "IDL unchanged, nothing to commit"
+          else
+            git commit -m "idl: sync bundle program IDL + types [skip ci]"
+            git push
+          fi
