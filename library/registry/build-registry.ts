@@ -29,12 +29,19 @@
 //               DFlow's Prediction Markets API (tokenized on first order).
 //               Run with --predictions-only to splice fresh rows into the
 //               existing registry.json without refetching stocks/crypto.
-//   crypto      CoinGecko markets, market cap > $1B, wrapped/staked/bridged
-//               excluded; Solana mint attached where CoinGecko lists one.
-//               BTC and ETH settle through aliases in rails.json (cbBTC, WETH).
-//   yield       tokenized T-bills with a Solana mint (USDY, OUSG, BUIDL, USTB,
-//               TBILL, USYC) + stables
-//   currencies  FX stables with a Solana mint (EURC)
+//   crypto      Jupiter Tokens API v2 verified list, gated on Jupiter's own
+//               mcap / pooled liquidity / holders / organic score, shelved by
+//               Jupiter's tags (Majors, Stables, Staked SOL, Meme, Solana DeFi,
+//               DePIN & infra, RWA & yield) with CoinGecko categories naming
+//               the rest. BTC and ETH settle through rails.json aliases
+//               (cbBTC, Portal WETH). Tokenized T-bills hand-curated. Pyth
+//               feed id on every row Hermes covers.
+//   currencies  one row per currency (every Pyth FX feed against USD, plus
+//               ILS/AED): Yahoo spot at build, Pyth feed id stamped, rail =
+//               the largest Jupiter-verified stablecoin on peg over $1M;
+//               railless rows stay on the shelf like CME contracts.
+//
+// Splice: bun build-registry.ts --only crypto,currencies  (keeps the rest)
 
 const OUT_DIR = new URL(".", import.meta.url).pathname;
 
@@ -311,8 +318,26 @@ async function buildPredictions() {
   return { assets: out, funnel };
 }
 
-// ── CRYPTO + YIELD ──────────────────────────────────────────────────────
-const EXCLUDE_CRYPTO = /wrapped|staked|bridged|restaked|weeth|wsteth|steth|cbbtc|wbtc|binance-peg|figure-heloc|figr/i;
+// ── CRYPTO (Jupiter's verified list, gated; shelves are Jupiter's own tags) ──
+// Research: bundlr/docs/solana-library-crypto-fx-research-2026-09-25.md.
+// Universe = every mint Jupiter verifies (~3,700). Gates are Jupiter's own
+// measures standing in for the Robinhood build's cap / volume / age; the $50K
+// depth quote in settleable.ts is the rail test that actually matters.
+// Shelves file once by priority: Stables › Majors › Staked SOL › Meme ›
+// Solana DeFi › DePIN & infra › RWA & yield › a CoinGecko category (Layer 1,
+// Layer 2, AI, Gaming, Privacy) › Other. BTC and ETH are rows in their own
+// right, settled through the rails.json aliases (cbBTC, Portal WETH); the
+// wrapped copies themselves are folded, not listed. Ticker and name come from
+// CoinGecko when the mint maps to a CoinGecko id (keys stay stable across
+// builds), else from Jupiter.
+const CRYPTO_GATE = { minMcapUsd: 50_000_000, minLiqUsd: 250_000, minHolders: 5_000, minOrganic: 40, lstTop: 8, _about: "invented 2026-09-25, not signed off — Jupiter mcap · pooled liquidity · holders · organic score; $1M liquidity was the first draft and dropped JTO, PYTH, ORCA, RENDER, HNT, GRASS (Jupiter's pool figure sits at $300–500K for them), so the floor is $250K and settleable.ts's $50K depth quote decides live vs thin" };
+const DROP_TAGS = new Set(["deprecated", "duplicate", "xstocks", "prestocks", "ondo", "stocks", "equities", "commodities", "pre-ipo"]);
+const NOISE_TAGS = /^(verified|community|community-assist|strict|moonshot|moonshot-verified|birdeye-trending|backpack|internal|shift|tessera|launchpad|token-2022)$/;
+const CG_SHELVES: [string, string[]][] = [["Layer 1", ["layer-1", "smart-contract-platform"]], ["Layer 2", ["layer-2"]], ["AI", ["artificial-intelligence"]], ["Gaming", ["gaming"]], ["Privacy", ["privacy-coins"]], ["DePIN & infra", ["depin"]]];
+const SHELF_ORDER = ["Majors", "Stables", "Staked SOL", "Meme", "Solana DeFi", "DePIN & infra", "RWA & yield", "Layer 1", "Layer 2", "AI", "Gaming", "Privacy", "Other", "Tokenized T-bills"];
+const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const WSOL = "So11111111111111111111111111111111111111112";
+const WRAPPED = /^(wbtc|weth|cbbtc|tbtc|zbtc|xbtc|wsol)$/i;
 const STABLE_IDS = new Set(["tether","usd-coin","dai","usds","ethena-usde","first-digital-usd","paypal-usd","usd1-wlfi","usdt0","falcon-finance","binance-bridged-usdt-bnb-smart-chain","usdtb","world-liberty-financial-usd","ripple-usd","global-dollar"]);
 const TBILLS: [string, string, string, string][] = [
   ["USDY","Ondo US Dollar Yield","0–3mo","ondo-us-dollar-yield"],["OUSG","Ondo Short-Term US Gov","0–1yr","ousg"],
@@ -321,105 +346,241 @@ const TBILLS: [string, string, string, string][] = [
 ];
 function attachMint(row: any, plat: any) {
   const mint = plat?.solana; if (!mint) return row;
-  row.chain = "Solana"; row.addr = mint; row.addrUrl = SOLSCAN + mint; row.chains = Object.values(plat).filter(Boolean).length;
+  row.chain = "Solana"; row.addr = mint; row.addrUrl = SOLSCAN + mint; row.chains = Object.keys(plat).filter((k) => plat[k]).slice(0, 12);
   return row;
 }
-async function buildCrypto(platforms: Record<string, any>) {
-  const mkts = await fetchJSON("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1");
-  const out: any[] = [];
-  const px = (c: any) => ({ cg: c.id, price: c.current_price, chg: c.price_change_percentage_24h ?? null });
-  for (const c of mkts) {
-    if (!((c.market_cap ?? 0) > 1e9)) continue;
-    if (EXCLUDE_CRYPTO.test(c.id) || EXCLUDE_CRYPTO.test(c.name)) continue;
-    const plat = c.id === "solana" ? { solana: "So11111111111111111111111111111111111111112" } : platforms[c.id];
-    if (STABLE_IDS.has(c.id)) {
-      out.push(attachMint({ t: c.symbol.toUpperCase(), n: c.name, cls: "crypto", sub: "Stables", venue: "stablecoin", status: "mintable", mcap: c.market_cap, src: "coingecko", ...px(c) }, plat));
-    } else {
-      out.push(attachMint({ t: c.symbol.toUpperCase(), n: c.name, cls: "crypto", sub: "Majors", venue: `spot · $${(c.market_cap / 1e9).toFixed(0)}B cap`, status: "mintable", mcap: c.market_cap, src: "coingecko", ...px(c) }, plat));
-    }
-  }
-  const tbillIds = TBILLS.map(([,,,id]) => id).join(",");
-  const tbillMkts = await fetchJSON(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${tbillIds}`);
-  const tbillById: Record<string, any> = Object.fromEntries(tbillMkts.map((c: any) => [c.id, c]));
-  for (const [t, n, dur, id] of TBILLS) {
-    const c = tbillById[id];
-    out.push(attachMint({ t, n, cls: "crypto", sub: "Tokenized T-bills", venue: `${dur} · yield`, status: "mintable", src: c ? "coingecko" : "hand-curated", ...(c ? px(c) : { cg: id }) }, platforms[id]));
-  }
-  // Jupiter marks for everything with a Solana mint (on-chain price + pooled liquidity)
-  const jup = await jupPrices(out.map((a) => a.addr).filter(Boolean));
-  for (const a of out) { const j = a.addr && jup[a.addr]; if (j) a.jup = { px: j.usdPrice ?? null, liq: j.liquidity != null ? Math.round(j.liquidity) : null, chg: j.priceChange24h ?? null, dec: j.decimals ?? null }; }
-  return out;
-}
+const RAILS = JSON.parse(await Bun.file(OUT_DIR + "rails.json").text());
+const CARRY = ["wiki", "near", "wd", "about", "yld"];
 
-// ── CURRENCIES (FX legs) ────────────────────────────────────────────────
-const FX_IDS: Record<string, string> = { "euro-coin": "EUR", "stasis-eurs": "EUR", "gyen": "JPY", "jpy-coin": "JPY", "xsgd": "SGD" };
-async function buildCurrencies(platforms: Record<string, any>) {
-  const mkts = await fetchJSON(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${Object.keys(FX_IDS).join(",")}`);
-  const out: any[] = mkts.map((c: any) => attachMint({
-    t: c.symbol.toUpperCase(), n: c.name, cls: "currencies", sub: FX_IDS[c.id],
-    venue: `FX stable · $${(c.market_cap / 1e6).toFixed(0)}M cap`, status: "mintable", src: "coingecko",
-    cg: c.id, price: c.current_price, chg: c.price_change_percentage_24h ?? null,
-  }, platforms[c.id]));
-  out.sort((a, b) => a.sub.localeCompare(b.sub) || a.t.localeCompare(b.t));
-  return out;
+type JupToken = { id: string; name: string; symbol: string; decimals?: number; tokenProgram?: string; holderCount?: number; mcap?: number; usdPrice?: number; liquidity?: number; organicScore?: number; tags?: string[]; audit?: any; firstPool?: { createdAt?: string }; stats24h?: { priceChange?: number; buyVolume?: number; sellVolume?: number } };
+let jupVerifiedCache: JupToken[] | null = null;
+async function jupVerified(): Promise<JupToken[]> {
+  if (!jupVerifiedCache) { jupVerifiedCache = await fetchJSON("https://lite-api.jup.ag/tokens/v2/tag?query=verified"); console.log(`jupiter verified: ${jupVerifiedCache!.length}`); }
+  return jupVerifiedCache!;
 }
+// Pyth Hermes feed ids (the id search is keyless; the price endpoint needs
+// PYTH_API_KEY, so ids are stamped now and priced later by the API relay).
+async function pythFeeds(assetType: string): Promise<Record<string, string>> {
+  try { const d: any[] = await rawFetch(`https://hermes.pyth.network/v2/price_feeds?asset_type=${assetType}`); const m: Record<string, string> = {}; for (const f of d) if (f?.attributes?.symbol) m[f.attributes.symbol] = f.id; return m; }
+  catch (e: any) { console.warn("pyth feeds:", e.message); return {}; }
+}
+const jupRow = (tk: JupToken) => ({ px: tk.usdPrice ?? null, liq: tk.liquidity != null ? Math.round(tk.liquidity) : null, chg: tk.stats24h?.priceChange ?? null, dec: tk.decimals ?? null, holders: tk.holderCount ?? null, organic: tk.organicScore != null ? Math.round(tk.organicScore) : null });
+const fmtCap = (n: number) => n >= 1e9 ? `$${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)}B` : `$${(n / 1e6).toFixed(0)}M`;
+const vol24 = (tk: JupToken) => (tk.stats24h?.buyVolume ?? 0) + (tk.stats24h?.sellVolume ?? 0);
+
+async function buildCrypto(platforms: Record<string, any>, cgList: any[], old: Record<string, any>) {
+  const verified = await jupVerified();
+  const cgById: Record<string, any> = Object.fromEntries(cgList.map((c: any) => [c.id, c]));
+  const mintToCg: Record<string, any> = {};
+  for (const c of cgList) { const m = c.platforms?.solana; if (m && !mintToCg[m]) mintToCg[m] = c; }
+  const pyth = await pythFeeds("crypto");
+  const member: Record<string, Set<string>> = {};
+  for (const [, cats] of CG_SHELVES) for (const cat of cats) {
+    member[cat] = new Set();
+    try { const rows = await fetchJSON(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=${cat}&order=market_cap_desc&per_page=250&page=1`); for (const r of rows) member[cat].add(r.id); }
+    catch (e: any) { console.warn(`category ${cat}:`, e.message); }
+  }
+  // BTC and ETH: the alias mint carries the row (rails.json: BTC → cbBTC, ETH → WETH)
+  const fold: Record<string, [string, string, string]> = {};
+  for (const [t, cg, n] of [["BTC", "bitcoin", "Bitcoin"], ["ETH", "ethereum", "Ethereum"]]) {
+    const alias = RAILS.aliases?.[t]; const r = RAILS.rails.find((x: any) => x.t === alias);
+    if (r) fold[r.addr] = [t, n, cg];
+  }
+  const foldMkts = await fetchJSON(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,${TBILLS.map(([,,,id]) => id).join(",")}`);
+  const cgMkt: Record<string, any> = Object.fromEntries(foldMkts.map((c: any) => [c.id, c]));
+  const tbillMints = new Set(TBILLS.map(([,,,id]) => platforms[id]?.solana).filter(Boolean));
+
+  const byMcap = [...verified].sort((a, b) => (b.mcap ?? 0) - (a.mcap ?? 0));
+  const lstKeep = new Set(byMcap.filter((t) => t.tags?.includes("original-lst") && !(t.tags ?? []).some((x) => DROP_TAGS.has(x))).slice(0, CRYPTO_GATE.lstTop).map((t) => t.id));
+  const funnel = { verified: verified.length, droppedTags: 0, lstBeyondTop: 0, mcap: 0, liquidity: 0, holders: 0, organic: 0, wrappedFolded: 0, fxStable: 0, kept: 0 };
+  const seen = new Set<string>(); const out: any[] = []; const byShelf: Record<string, number> = {};
+  for (const tk of byMcap) {
+    const tags = tk.tags ?? [];
+    if (tags.some((x) => DROP_TAGS.has(x))) { funnel.droppedTags++; continue; }
+    if (tbillMints.has(tk.id)) continue;
+    if (tags.includes("lst") && !lstKeep.has(tk.id)) { funnel.lstBeyondTop++; continue; }
+    if (!((tk.mcap ?? 0) >= CRYPTO_GATE.minMcapUsd)) continue; funnel.mcap++;
+    if (!((tk.liquidity ?? 0) >= CRYPTO_GATE.minLiqUsd)) continue; funnel.liquidity++;
+    if (!((tk.holderCount ?? 0) >= CRYPTO_GATE.minHolders)) continue; funnel.holders++;
+    if (!((tk.organicScore ?? 0) >= CRYPTO_GATE.minOrganic)) continue; funnel.organic++;
+    const f = fold[tk.id];
+    if (!f && WRAPPED.test(tk.symbol)) { funnel.wrappedFolded++; continue; }
+    const cgc = f ? cgById[f[2]] : tk.id === WSOL ? cgById["solana"] : mintToCg[tk.id];
+    const t = f ? f[0] : (cgc?.symbol || tk.symbol).replace(/^\$/, "").toUpperCase();
+    if (seen.has(t)) continue; seen.add(t);
+    const n = f ? f[1] : (cgc?.name || tk.name);
+    const stable = tags.includes("stable") || (cgc && STABLE_IDS.has(cgc.id));
+    if (stable && Math.abs((tk.usdPrice ?? 1) - 1) > 0.03) { funnel.fxStable++; continue; } // EURC and friends are currencies, not crypto
+    const cats = cgc ? CG_SHELVES.flatMap(([shelf, ids]) => ids.some((i) => member[i]?.has(cgc.id)) ? [shelf] : []) : [];
+    const sub = stable ? "Stables" : f || tags.includes("major") ? "Majors" : tags.includes("original-lst") ? "Staked SOL" : tags.includes("meme") ? "Meme"
+      : tags.includes("defi") ? "Solana DeFi" : tags.includes("infra") ? "DePIN & infra" : tags.some((x) => x === "rwa" || x === "yield" || x === "yb") ? "RWA & yield" : cats[0] || "Other";
+    const plats = cgc?.platforms || { solana: tk.id };
+    const mk = f ? cgMkt[f[2]] : null;
+    const mcap = Math.round(mk?.market_cap ?? tk.mcap ?? 0);
+    const row: any = {
+      t, n, cls: "crypto", sub, status: "mintable",
+      venue: stable ? `stablecoin · ${fmtCap(mcap)} cap · Solana` : `Solana · ${fmtCap(mcap)} cap · $${(vol24(tk) / 1e6).toFixed(vol24(tk) >= 1e7 ? 0 : 1)}M 24h on Jupiter · ${((tk.holderCount ?? 0) / 1e3).toFixed(0)}K holders${f ? ` · settles as ${RAILS.aliases[t]}` : ""}`,
+      chain: "Solana", addr: tk.id, addrUrl: SOLSCAN + tk.id, addrSrc: "jupiter verified list", chains: Object.keys(plats).filter((k) => plats[k]).slice(0, 12),
+      program: tk.tokenProgram === TOKEN_2022 ? "Token-2022" : "Token",
+      cg: cgc?.id, cgUrl: cgc ? `https://www.coingecko.com/en/coins/${cgc.id}` : undefined,
+      price: mk?.current_price ?? tk.usdPrice ?? null, chg: mk?.price_change_percentage_24h ?? tk.stats24h?.priceChange ?? null,
+      mcap, vol: Math.round(mk?.total_volume ?? vol24(tk)), holders: tk.holderCount ?? null, organic: tk.organicScore != null ? Math.round(tk.organicScore) : null,
+      jupTags: tags.filter((x) => !NOISE_TAGS.test(x)), cats: cats.length ? cats : undefined,
+      firstPool: tk.firstPool?.createdAt?.slice(0, 10) ?? null,
+      jup: jupRow(tk), pyth: pyth[`Crypto.${t}/USD`] ?? null, src: "jupiter tokens v2 verified list", gates: CRYPTO_GATE,
+    };
+    const o = old[cgc?.id ?? ""] ?? old["t:" + t]; if (o) for (const k of CARRY) if (o[k] !== undefined) row[k] = o[k];
+    out.push(row); byShelf[sub] = (byShelf[sub] || 0) + 1;
+  }
+  funnel.kept = out.length;
+  for (const [t, n, dur, id] of TBILLS) {
+    const c = cgMkt[id];
+    const row: any = attachMint({ t, n, cls: "crypto", sub: "Tokenized T-bills", venue: `${dur} · yield`, status: "mintable", src: c ? "coingecko" : "hand-curated", cg: id, cgUrl: `https://www.coingecko.com/en/coins/${id}`, price: c?.current_price ?? null, chg: c?.price_change_percentage_24h ?? null, mcap: c?.market_cap ?? null }, platforms[id]);
+    const tk = row.addr ? verified.find((x) => x.id === row.addr) : null; if (tk) row.jup = jupRow(tk);
+    const o = old[id]; if (o) for (const k of CARRY) if (o[k] !== undefined) row[k] = o[k];
+    out.push(row); byShelf["Tokenized T-bills"] = (byShelf["Tokenized T-bills"] || 0) + 1;
+  }
+  out.sort((a, b) => SHELF_ORDER.indexOf(a.sub) - SHELF_ORDER.indexOf(b.sub) || (b.mcap ?? 0) - (a.mcap ?? 0));
+  let trending: string[] = [];
+  try { const top: JupToken[] = await fetchJSON("https://lite-api.jup.ag/tokens/v2/toporganicscore/24h?limit=50"); const byMint: Record<string, any> = Object.fromEntries(out.map((a) => [a.addr, a])); trending = top.map((x) => byMint[x.id]?.cg).filter(Boolean); }
+  catch (e: any) { console.warn("jupiter trending:", e.message); }
+  console.log("crypto funnel", funnel); console.log("crypto shelves", byShelf);
+  return { assets: out, meta: { built: new Date().toISOString(), gates: CRYPTO_GATE, funnel, shelves: SHELF_ORDER, byShelf }, trending };
+}
+const CRYPTO_SOURCE = `Jupiter Tokens API v2 verified list (~3,700 mints) · gates ≥ $${CRYPTO_GATE.minMcapUsd / 1e6}M cap, ≥ $${CRYPTO_GATE.minLiqUsd / 1e3}K pooled liquidity, ≥ ${CRYPTO_GATE.minHolders.toLocaleString()} holders, organic score ≥ ${CRYPTO_GATE.minOrganic} (invented) · stock, pre-IPO and commodity tokens belong to other departments · LSTs beyond the top ${CRYPTO_GATE.lstTop} dropped · shelves are Jupiter's own tags (Majors, Stables, Staked SOL, Meme, Solana DeFi, DePIN & infra, RWA & yield), CoinGecko categories name the rest · BTC and ETH settle through cbBTC and Portal WETH (rails.json aliases) · T-bills hand-curated · Pyth feed id on every row Hermes covers`;
+
+// ── CURRENCIES (one row per currency; spot everywhere, rail where a Solana stable is on peg) ──
+// The same shape as commodities: every currency Pyth publishes an FX feed
+// for (plus ILS and AED, which Yahoo covers) is a row, priced at build from
+// Yahoo spot (keyless) with the Pyth feed id stamped for the relay. The rail
+// is the largest Jupiter-verified stablecoin for that currency that trades
+// within 3% of spot and clears the cap floor; rows without one are shown
+// railless, the way CME contracts are, and the site blocks them at the bench.
+// A leg here is a currency you hold — EUR/USD is euros, not a pair; crosses
+// (EUR/GBP, AUD/NZD, USDXY) are not rows.
+const FX_GATE = { pegTolerance: 0.03, minMcapUsd: 1_000_000, _about: "peg tolerance computed against Yahoo spot; $1M cap floor for a rail invented 2026-09-25, not signed off — under it the stable is named on the row but the leg stays railless" };
+const CUR: [string, string, string, string, RegExp][] = [
+  ["EUR", "EURUSD=X", "EUR/USD", "Euro", /eur/i], ["JPY", "JPY=X", "USD/JPY", "Japanese yen", /jpy|yen/i], ["GBP", "GBPUSD=X", "GBP/USD", "British pound", /gbp|pound/i],
+  ["CHF", "CHF=X", "USD/CHF", "Swiss franc", /chf|franc/i], ["AUD", "AUDUSD=X", "AUD/USD", "Australian dollar", /aud/i], ["NZD", "NZDUSD=X", "NZD/USD", "New Zealand dollar", /nzd/i],
+  ["CAD", "CAD=X", "USD/CAD", "Canadian dollar", /cad/i], ["SGD", "SGD=X", "USD/SGD", "Singapore dollar", /sgd/i], ["CNY", "CNY=X", "USD/CNY", "Chinese yuan", /cny|cnh|yuan|rmb/i],
+  ["CNH", "CNH=X", "USD/CNH", "Chinese yuan (offshore)", /cnh/i], ["HKD", "HKD=X", "USD/HKD", "Hong Kong dollar", /hkd/i], ["MXN", "MXN=X", "USD/MXN", "Mexican peso", /mxn|peso/i],
+  ["KRW", "KRW=X", "USD/KRW", "South Korean won", /krw|won/i], ["TRY", "TRY=X", "USD/TRY", "Turkish lira", /try|lira/i], ["ILS", "ILS=X", "USD/ILS", "Israeli shekel", /ils|shekel/i],
+  ["AED", "AED=X", "USD/AED", "UAE dirham", /aed|dirham/i], ["INR", "INR=X", "USD/INR", "Indian rupee", /inr|rupee/i], ["IDR", "IDR=X", "USD/IDR", "Indonesian rupiah", /idr|rupiah/i],
+  ["BRL", "BRL=X", "USD/BRL", "Brazilian real", /brl|brz/i], ["ZAR", "ZAR=X", "USD/ZAR", "South African rand", /zar|rand/i], ["NOK", "NOK=X", "USD/NOK", "Norwegian krone", /nok/i],
+  ["SEK", "SEK=X", "USD/SEK", "Swedish krona", /sek/i], ["DKK", "DKK=X", "USD/DKK", "Danish krone", /dkk/i], ["PLN", "PLN=X", "USD/PLN", "Polish zloty", /pln|zloty/i],
+  ["CZK", "CZK=X", "USD/CZK", "Czech koruna", /czk|koruna/i], ["HUF", "HUF=X", "USD/HUF", "Hungarian forint", /huf|forint/i], ["RON", "RON=X", "USD/RON", "Romanian leu", /ron|leu/i],
+  ["PHP", "PHP=X", "USD/PHP", "Philippine peso", /php/i], ["THB", "THB=X", "USD/THB", "Thai baht", /thb|baht/i], ["MYR", "MYR=X", "USD/MYR", "Malaysian ringgit", /myr|ringgit/i],
+  ["TWD", "TWD=X", "USD/TWD", "Taiwan dollar", /twd/i], ["VND", "VND=X", "USD/VND", "Vietnamese dong", /vnd|dong/i],
+];
+const FX_NOT_STABLE = /meme|launchpad|stocks|xstocks|ondo|prestocks|yield|yb|lst|defi/;
+async function yahooSpot(sym: string) {
+  try {
+    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=2d`, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!r.ok) return null; const m = (await r.json())?.chart?.result?.[0]?.meta; if (!m?.regularMarketPrice) return null;
+    return { rate: m.regularMarketPrice as number, prev: (m.chartPreviousClose as number | undefined) ?? null };
+  } catch { return null; }
+}
+async function buildCurrencies(_platforms: Record<string, any>, cgList: any[], old: Record<string, any>) {
+  const verified = await jupVerified();
+  const mintToCg: Record<string, any> = {};
+  for (const c of cgList) { const m = c.platforms?.solana; if (m && !mintToCg[m]) mintToCg[m] = c; }
+  const pyth = await pythFeeds("fx");
+  const asOf = new Date().toISOString();
+  const spots: Record<string, any> = {}; const rows: any[] = []; const funnel: Record<string, any> = {}; const railless: string[] = [];
+  for (const [code, sym, pair, name, rx] of CUR) {
+    const y = await yahooSpot(sym); if (!y) { console.warn("no spot", sym); continue; }
+    const direct = pair.startsWith(code);
+    const usdPer = direct ? y.rate : 1 / y.rate;
+    const usdPerPrev = y.prev ? (direct ? y.prev : 1 / y.prev) : null;
+    const feed = pyth[`FX.${pair}`] ?? null;
+    spots[code] = { sym, pair, name, quote: y.rate, prevQuote: y.prev, usdPer, asOf, src: "Yahoo Finance", pyth: feed };
+    const f = { onJupiter: 0, notStable: 0, offPeg: 0, underCap: 0, kept: 0 } as Record<string, number>;
+    const cands: JupToken[] = [];
+    let underFloor: JupToken | null = null;
+    for (const tk of verified) {
+      if (!rx.test(tk.symbol)) continue;
+      f.onJupiter++;
+      const tags = tk.tags ?? [];
+      // VNX (VCHF, VGBP) and StraitsX carry neither the `stable` tag nor an open mint authority; the peg check below is the real test
+      if (tags.some((x) => FX_NOT_STABLE.test(x))) { f.notStable++; continue; }
+      const drift = (tk.usdPrice ?? 0) / usdPer - 1;
+      if (Math.abs(drift) > FX_GATE.pegTolerance) { f.offPeg++; continue; }
+      if (!((tk.mcap ?? 0) >= FX_GATE.minMcapUsd)) { f.underCap++; if (!underFloor || (tk.mcap ?? 0) > (underFloor.mcap ?? 0)) underFloor = tk; continue; }
+      cands.push(tk);
+    }
+    cands.sort((a, b) => (b.mcap ?? 0) - (a.mcap ?? 0));
+    const best = cands[0] ?? null; if (best) f.kept = 1;
+    const cgc = best ? mintToCg[best.id] : null;
+    const twins = cands.slice(1).map((c) => c.symbol);
+    const row: any = {
+      t: code, n: name, cls: "currencies", sub: code, status: "mintable",
+      pair, spotSym: sym, spot: usdPer, spotQuote: y.rate, spotPrev: y.prev, pyth: feed,
+      venue: best ? `FX stable · ${best.symbol} · ${fmtCap(best.mcap ?? 0)} cap · Solana` : `spot only · ${underFloor ? `${underFloor.symbol} is on peg at $${((underFloor.mcap ?? 0) / 1e6).toFixed(1)}M, under the $${FX_GATE.minMcapUsd / 1e6}M floor` : "no Solana stablecoin on peg yet"}`,
+      chain: best ? "Solana" : null, addr: best?.id ?? null, addrUrl: best ? SOLSCAN + best.id : undefined, addrSrc: best ? "jupiter verified list" : undefined,
+      chains: best ? Object.keys(cgc?.platforms || { solana: 1 }).filter((k) => (cgc?.platforms || { solana: 1 })[k]).slice(0, 12) : [],
+      program: best ? (best.tokenProgram === TOKEN_2022 ? "Token-2022" : "Token") : undefined,
+      stable: best ? { t: best.symbol, n: best.name, mint: best.id, mcap: Math.round(best.mcap ?? 0), liq: Math.round(best.liquidity ?? 0), holders: best.holderCount ?? null } : null,
+      stableUnderFloor: !best && underFloor ? { t: underFloor.symbol, mint: underFloor.id, mcap: Math.round(underFloor.mcap ?? 0) } : undefined,
+      cg: cgc?.id, cgUrl: cgc ? `https://www.coingecko.com/en/coins/${cgc.id}` : undefined,
+      price: best?.usdPrice ?? usdPer, chg: best ? best.stats24h?.priceChange ?? null : usdPerPrev ? +(100 * (usdPer / usdPerPrev - 1)).toFixed(3) : null,
+      pegDrift: best ? (best.usdPrice ?? 0) / usdPer - 1 : null, mcap: best ? Math.round(best.mcap ?? 0) : null, twins: twins.length ? twins : undefined,
+      jup: best ? jupRow(best) : undefined, src: best ? "jupiter tokens v2 verified list + Yahoo spot" : "Yahoo spot (Pyth feed id attached)", gates: FX_GATE,
+    };
+    const o = old[cgc?.id ?? ""] ?? old["t:" + code]; if (o) for (const k of CARRY) if (o[k] !== undefined) row[k] = o[k];
+    rows.push(row); funnel[code] = f; if (!best) railless.push(code);
+  }
+  console.log("fx spots", Object.fromEntries(Object.entries(spots).map(([k, v]: [string, any]) => [k, v.quote])));
+  console.log("fx rails", rows.filter((r) => r.stable).map((r) => `${r.t}:${r.stable.t}`).join(" "), "· railless", railless.join(" "));
+  return { assets: rows, meta: { built: asOf, gates: FX_GATE, spots, funnel, missing: {}, railless, order: CUR.map((c) => c[0]), src: "Yahoo spot at build (Pyth FX feed ids stamped for the relay); rail = largest Jupiter-verified stablecoin on peg over the floor" } };
+}
+const FX_SOURCE = `one row per currency (${CUR.length}: every Pyth FX feed against the dollar, plus ILS and AED) · spot from Yahoo Finance at build, Pyth Hermes feed id on the row · rail = largest Jupiter-verified stablecoin for the currency within ${Math.round(FX_GATE.pegTolerance * 100)}% of spot and over $${FX_GATE.minMcapUsd / 1e6}M cap (invented), twins listed · rows with no rail stay on the shelf railless like CME contracts · crosses are not rows`;
 
 // ── ASSEMBLE ────────────────────────────────────────────────────────────
-if (process.argv.includes("--predictions-only")) {
-  const preds = await buildPredictions();
-  const registry = JSON.parse(await Bun.file(OUT_DIR + "registry.json").text());
-  registry.assets = [...registry.assets.filter((a: any) => a.cls !== "predictions"), ...preds.assets];
-  registry.meta.built = new Date().toISOString();
-  registry.meta.gates = GATES;
-  registry.meta.funnel = preds.funnel;
-  registry.meta.counts.predictions = preds.assets.length;
-  registry.meta.counts.total = registry.assets.length;
-  registry.meta.sources.predictions = PRED_SOURCE;
-  if (registry.meta.rails) registry.meta.rails.counts.predictions = { tokenizable: preds.assets.length };
-  await Bun.write(OUT_DIR + "registry.json", JSON.stringify(registry, null, 1));
-  await Bun.write(OUT_DIR + "registry.js", "// generated by build-registry.ts — do not edit\nwindow.REGISTRY = " + JSON.stringify(registry) + ";\n");
-  console.log("predictions spliced:", registry.meta.counts.predictions, "· total:", registry.meta.counts.total);
-  console.log("kalshi funnel:", preds.funnel);
-  await Bun.$`bun ${OUT_DIR}inline.ts`;
-  process.exit(0);
-}
+// Full build: bun build-registry.ts
+// Splice one or more departments into the existing registry.json (no refetch
+// of the rest): bun build-registry.ts --only crypto,currencies
+// (--predictions-only is the nightly's alias for --only predictions.)
+const onlyIdx = process.argv.indexOf("--only");
+const ONLY: string[] | null = onlyIdx >= 0 ? (process.argv[onlyIdx + 1] || "").split(",").filter(Boolean) : process.argv.includes("--predictions-only") ? ["predictions"] : null;
+const want = (cls: string) => !ONLY || ONLY.includes(cls);
+const prior: any = (await Bun.file(OUT_DIR + "registry.json").exists()) ? JSON.parse(await Bun.file(OUT_DIR + "registry.json").text()) : null;
+if (ONLY && !prior) throw new Error("--only needs an existing registry.json to splice into");
+const old: Record<string, any> = {};
+for (const a of prior?.assets ?? []) if (a.cls === "crypto" || a.cls === "currencies") { if (a.cg) old[a.cg] = a; old["t:" + a.t] ??= a; }
 
-// one platform map for every builder (id → { solana: mint, … })
-const cgList: any[] = await fetchJSON("https://api.coingecko.com/api/v3/coins/list?include_platform=true");
+const needCg = want("stocks") || want("crypto") || want("commodities") || want("currencies");
+const cgList: any[] = needCg ? await fetchJSON("https://api.coingecko.com/api/v3/coins/list?include_platform=true") : [];
 const platforms: Record<string, any> = Object.fromEntries(cgList.map((c: any) => [c.id, c.platforms || {}]));
 
 const [stocks, preds, crypto, commodities, currencies] = await Promise.all([
-  buildStocks(), buildPredictions(), buildCrypto(platforms), buildCommodities(platforms), buildCurrencies(platforms),
+  want("stocks") ? buildStocks() : null,
+  want("predictions") ? buildPredictions() : null,
+  want("crypto") ? buildCrypto(platforms, cgList, old) : null,
+  want("commodities") ? buildCommodities(platforms) : null,
+  want("currencies") ? buildCurrencies(platforms, cgList, old) : null,
 ]);
-const predAssets = preds.assets;
-const assets = [...stocks, ...commodities, ...predAssets, ...crypto, ...currencies];
 
-const registry = {
-  meta: {
-    built: new Date().toISOString(),
-    chain: "Solana",
-    gates: GATES,
-    funnel: preds.funnel,
-    sources: {
-      stocks: "CoinGecko coins list (platforms.solana) — Backed xStocks + Ondo Global Markets (issuer facet); sectors from S&P 500 GICS dataset; on-chain marks, pooled liquidity and underlying reference price from Jupiter Price API v3",
-      commodities: "hand-curated CME/ICE/NYMEX/CBOT/COMEX contracts (no rail); tokenized gold XAUT0 live from CoinGecko, native Solana mint",
-      predictions: PRED_SOURCE,
-      crypto: "CoinGecko markets, cap > $1B, wrapped/staked excluded, Solana mint from the platform map; T-bills with a Solana mint",
-      currencies: "CoinGecko FX stables with a Solana mint (EURC)",
-    },
-    counts: { total: assets.length, stocks: stocks.length, commodities: commodities.length, predictions: predAssets.length, crypto: crypto.length, currencies: currencies.length },
-    issuers: Object.fromEntries([...new Set(stocks.map((s: any) => s.issuer))].map((i) => [i, stocks.filter((s: any) => s.issuer === i).length])),
-    withMint: assets.filter((a: any) => a.addr).length,
-  },
-  assets,
-};
+const registry: any = prior && ONLY ? prior : { meta: { chain: "Solana", sources: {}, counts: {} }, assets: [] };
+const built: Record<string, any[] | null> = { stocks, predictions: preds?.assets ?? null, crypto: crypto?.assets ?? null, commodities, currencies: currencies?.assets ?? null };
+const keep = registry.assets.filter((a: any) => !built[a.cls]);
+registry.assets = [...keep, ...(stocks ?? []), ...(commodities ?? []), ...(preds?.assets ?? []), ...(crypto?.assets ?? []), ...(currencies?.assets ?? [])];
+if (!ONLY) registry.assets = [...(stocks ?? []), ...(commodities ?? []), ...(preds?.assets ?? []), ...(crypto?.assets ?? []), ...(currencies?.assets ?? [])];
+registry.meta.built = new Date().toISOString();
+registry.meta.chain = "Solana";
+if (preds) { registry.meta.gates = GATES; registry.meta.funnel = preds.funnel; registry.meta.sources.predictions = PRED_SOURCE; if (registry.meta.rails?.counts) registry.meta.rails.counts.predictions = { tokenizable: preds.assets.length }; }
+if (stocks) { registry.meta.sources.stocks = "CoinGecko coins list (platforms.solana) — Backed xStocks + Ondo Global Markets (issuer facet); sectors from S&P 500 GICS dataset; on-chain marks, pooled liquidity and underlying reference price from Jupiter Price API v3"; registry.meta.issuers = Object.fromEntries([...new Set(stocks.map((s: any) => s.issuer))].map((i) => [i, stocks.filter((s: any) => s.issuer === i).length])); }
+if (commodities) registry.meta.sources.commodities = "hand-curated CME/ICE/NYMEX/CBOT/COMEX contracts (no rail); tokenized gold XAUT0 live from CoinGecko, native Solana mint";
+if (crypto) { registry.meta.sources.crypto = CRYPTO_SOURCE; registry.meta.crypto = crypto.meta; registry.meta.cryptoTrending = { asOf: crypto.meta.built, ids: crypto.trending, src: "Jupiter tokens v2 top organic score, 24h (rows in the library only)" }; }
+if (currencies) { registry.meta.sources.currencies = FX_SOURCE; registry.meta.fx = currencies.meta; }
+registry.meta.counts = { total: registry.assets.length };
+for (const cls of ["stocks", "commodities", "predictions", "crypto", "currencies"]) registry.meta.counts[cls] = registry.assets.filter((a: any) => a.cls === cls).length;
+registry.meta.withMint = registry.assets.filter((a: any) => a.addr).length;
 
 await Bun.write(OUT_DIR + "registry.json", JSON.stringify(registry, null, 1));
 await Bun.write(OUT_DIR + "registry.js", "// generated by build-registry.ts — do not edit\nwindow.REGISTRY = " + JSON.stringify(registry) + ";\n");
-console.log("counts:", registry.meta.counts);
-console.log("issuers:", registry.meta.issuers, "· rows with a Solana mint:", registry.meta.withMint);
-console.log("kalshi funnel:", registry.meta.funnel);
-console.log("stock subs:", [...new Set(stocks.map((s: any) => s.sub))].join(", "));
+console.log(ONLY ? `spliced ${ONLY.join(", ")} ·` : "full build ·", "counts:", registry.meta.counts, "· rows with a Solana mint:", registry.meta.withMint);
+if (preds) console.log("kalshi funnel:", preds.funnel);
+if (stocks) console.log("stock subs:", [...new Set(stocks.map((s: any) => s.sub))].join(", "));
 console.log("wrote", OUT_DIR + "registry.json and registry.js");
 
 await Bun.$`bun ${OUT_DIR}inline.ts`;

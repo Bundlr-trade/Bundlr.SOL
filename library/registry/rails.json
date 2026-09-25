@@ -1,5 +1,5 @@
 {
- "_about": "Solana settlement rails. One launch chain. settleable.ts re-checks every mint on-chain (owner program, decimals, freeze authority via getMultipleAccounts) and quotes depth through Jupiter's swap quote at $1K / $10K / $50K / $250K in USDC, so an entry here is a claim it will test, not a fact it trusts. Mint addresses come from CoinGecko's platform map or the issuer's own docs — never typed from memory.",
+ "_about": "Solana settlement rails. One launch chain. settleable.ts re-checks every mint on-chain (owner program, decimals, freeze authority via getMultipleAccounts) and quotes depth through Jupiter's swap quote at $1K / $10K / $50K / $250K in USDC, so an entry here is a claim it will test, not a fact it trusts. Mint addresses come from CoinGecko's platform map or the issuer's own docs \u2014 never typed from memory.",
  "chains": {
   "Solana": {
    "rpc": "https://api.mainnet-beta.solana.com",
@@ -52,7 +52,7 @@
    "chain": "Solana",
    "addr": "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P",
    "decimals": 6,
-   "issuer": "Tether Gold (TG Commodities) via LayerZero OFT — one token = one troy ounce of LBMA gold",
+   "issuer": "Tether Gold (TG Commodities) via LayerZero OFT \u2014 one token = one troy ounce of LBMA gold",
    "restrictions": "redemption for bars via Tether, minimums apply; secondary market is open",
    "verified": "2026-09-11",
    "source": "CoinGecko coins/tether-gold-tokens platforms.solana; re-checked on-chain by settleable.ts"
@@ -76,14 +76,14 @@
    "status": "byDepth",
    "fromRegistry": true,
    "gate": null,
-   "note": "xStock (Backed Assets (JE) Ltd; Token-2022, 8 dec). Fully backed tracker certificates; secondary trading on Solana is permissionless, primary issuance is KYC'd and ex-US. Depth is Jupiter's route (Raydium CLMM, Byreal, Riptide, BinaryFi…)."
+   "note": "xStock (Backed Assets (JE) Ltd; Token-2022, 8 dec). Fully backed tracker certificates; secondary trading on Solana is permissionless, primary issuance is KYC'd and ex-US. Depth is Jupiter's route (Raydium CLMM, Byreal, Riptide, BinaryFi\u2026)."
   },
   "stocks:Ondo Global Markets": {
    "chain": "Solana",
    "status": "gated",
    "fromRegistry": true,
    "gate": "primary: mint/redeem at NAV through the Ondo Stocks API (attestation-signed, whitelisted non-US address); Jupiter shows no route for most tickers",
-   "note": "Ondo Global Markets token (Ondo Global Markets (BVI) Ltd; Token-2022, 9 dec). 1:1 backed structured notes, Chainlink price feeds, daily attestations. Liquidity is primary — the protocol would source from the issuer, so secondary depth is the wrong gate."
+   "note": "Ondo Global Markets token (Ondo Global Markets (BVI) Ltd; Token-2022, 9 dec). 1:1 backed structured notes, Chainlink price feeds, daily attestations. Liquidity is primary \u2014 the protocol would source from the issuer, so secondary depth is the wrong gate."
   },
   "predictions": {
    "chain": "Solana",
@@ -105,13 +105,18 @@
   "currencies": {
    "chain": null,
    "status": "none",
-   "note": "no Solana-native issuance (EURC is native on Solana; the rest are not)"
+   "note": "no Jupiter-verified stablecoin for this currency on peg over the $1M floor yet \u2014 spot only, shown like a CME contract (build-registry.ts names the largest on-peg mint under the floor on the row)"
   }
  },
  "thresholds": {
   "_about": "price impact is Jupiter's priceImpactPct for the route, as a fraction. Rows under minLiqToQuote of pooled liquidity (Jupiter price v3) are marked thin without a quote.",
   "liveMaxImpactAt50k": 0.01,
-  "sizesUsd": [1000, 10000, 50000, 250000],
+  "sizesUsd": [
+   1000,
+   10000,
+   50000,
+   250000
+  ],
   "minLiqToQuote": 10000
  }
 }
