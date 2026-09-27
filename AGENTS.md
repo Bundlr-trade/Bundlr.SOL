@@ -19,11 +19,7 @@ The program has never built locally on this box (no cargo/rustc/solana CLI here,
 - **`deploy` job**: downloads that artifact, writes the `PROGRAM_KEYPAIR` and `DEPLOYER_KEYPAIR` secrets to files, airdrops devnet SOL to the deployer (retries — the devnet faucet is flaky; if it never funds the deployer, the job logs a warning and skips deploy/e2e rather than failing the run), runs `solana program deploy` with `--program-id` set to the program keypair, then `bun devnet/setup-mocks.ts` and `bun devnet/e2e.ts` against devnet. Prints the program ID and explorer/Solscan links to the job summary.
 - **`commit-idl` job**: copies the built IDL/types into `idl/bundle.json` and `idl/bundle.ts` and commits them back to `main` (`[skip ci]`) so the frontend can import them without running Anchor.
 
-Secrets (repo settings → Actions → secrets, set via `gh secret set … -R Bundlr-trade/Bundlr.SOL`):
-- `PROGRAM_KEYPAIR` — 64-byte JSON keypair whose pubkey matches `declare_id!` in `programs/bundle/src/lib.rs` and `PROGRAM_ID` in `devnet/bundle-client.ts`. Currently `41NTbgRwNoyYUjSd9xCuf7Ny6ZUYgMxk6knq2Lpvy1RD`.
-- `DEPLOYER_KEYPAIR` — pays for deploy + devnet airdrops/faucet mints.
-
-Both keypairs are also kept locally, untracked, under `.keys/` (gitignored) — never commit a keypair. To rotate either, generate a fresh one, update `declare_id!`/`PROGRAM_ID` (for the program keypair), and re-run `gh secret set`.
+Secrets: as of 2026-09-27 the repo has **none**. Jon stepped away from Bundlr and removed `PROGRAM_KEYPAIR` / `DEPLOYER_KEYPAIR` so the next owner deploys under their own keys; until a new owner sets both, any push that touches `programs/**` fails at the keypair step (the build-only gate is written but unpushed: the gh token lacks `workflow` scope). Handoff steps (new program address, funding, secrets, upgrade authority) are in `DEPLOY.md`. The old `41NTbg…y1RD` program keypair and its deployer stay only in Jon's untracked `.keys/` and were never deployed anywhere.
 
 ## Rebuild order
 
