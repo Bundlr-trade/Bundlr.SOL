@@ -16,4 +16,4 @@ cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "echo \"no anchor mocha tests — see devnet/e2e.ts\""
+test = "cd tests && bun install && bun test"

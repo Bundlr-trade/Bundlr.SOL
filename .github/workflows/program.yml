@@ -7,6 +7,12 @@ on:
       - "programs/**"
       - "Anchor.toml"
       - "Cargo.toml"
+      - "tests/**"
+      - ".github/workflows/program.yml"
+  pull_request:
+    paths:
+      - "programs/**"
+      - "tests/**"
       - ".github/workflows/program.yml"
   workflow_dispatch: {}
 
@@ -65,11 +71,19 @@ jobs:
           mkdir -p ~/.config/solana
           [ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
 
-      - name: Place the program keypair so anchor's key-sync doesn't mint a new program id
+      # The keypair only matters for deploy; the program id is compiled in from
+      # declare_id!. With no secret set (a fresh fork), anchor makes a throwaway one.
+      - name: Place the program keypair, if this repo has one
+        env:
+          PROGRAM_KEYPAIR: ${{ secrets.PROGRAM_KEYPAIR }}
         run: |
           mkdir -p target/deploy
-          printf '%s' '${{ secrets.PROGRAM_KEYPAIR }}' > target/deploy/bundle-keypair.json
-          solana-keygen pubkey target/deploy/bundle-keypair.json
+          if [ -n "$PROGRAM_KEYPAIR" ]; then
+            printf '%s' "$PROGRAM_KEYPAIR" > target/deploy/bundle-keypair.json
+            solana-keygen pubkey target/deploy/bundle-keypair.json
+          else
+            echo "no PROGRAM_KEYPAIR secret — building without one"
+          fi
 
       - name: anchor build
         run: anchor build
@@ -84,8 +98,49 @@ jobs:
             target/types/*.ts
           if-no-files-found: error
 
-  deploy:
+  test:
     needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-program-artifacts
+          path: target
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: bun install (tests + the shared devnet client they import)
+        run: |
+          (cd devnet && bun install)
+          (cd tests && bun install)
+
+      - name: LiteSVM tests against the built program
+        working-directory: tests
+        run: bun test
+
+  keys:
+    runs-on: ubuntu-22.04
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - id: check
+        env:
+          PROGRAM_KEYPAIR: ${{ secrets.PROGRAM_KEYPAIR }}
+          DEPLOYER_KEYPAIR: ${{ secrets.DEPLOYER_KEYPAIR }}
+        run: |
+          if [ -n "$PROGRAM_KEYPAIR" ] && [ -n "$DEPLOYER_KEYPAIR" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PROGRAM_KEYPAIR / DEPLOYER_KEYPAIR not set — build and tests only, no deploy. See DEPLOY.md."
+          fi
+
+  deploy:
+    needs: [build, test, keys]
+    if: github.event_name != 'pull_request' && needs.keys.outputs.present == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -193,7 +248,8 @@ jobs:
           echo "- Solscan: https://solscan.io/account/$PROGRAM_ID?cluster=devnet" >> "$GITHUB_STEP_SUMMARY"
 
   commit-idl:
-    needs: build
+    needs: [build, test]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

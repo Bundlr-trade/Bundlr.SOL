@@ -81,7 +81,7 @@ pub mod bundle {
             let expected_vault = get_associated_token_address_with_program_id(&bundle_key, &leg.mint, tp.key);
             require_keys_eq!(vault.key(), expected_vault, BundleError::VaultMismatch);
             let decimals = mint_decimals(leg_mint)?;
-            let amount = leg_amount(units, leg.qty_per_unit)?;
+            let amount = leg_amount(units, leg.qty_per_unit, Rounding::Up)?;
             token_interface::transfer_checked(
                 CpiContext::new(
                     tp.to_account_info(),
@@ -145,7 +145,7 @@ pub mod bundle {
             let expected_vault = get_associated_token_address_with_program_id(&bundle_key, &leg.mint, tp.key);
             require_keys_eq!(vault.key(), expected_vault, BundleError::VaultMismatch);
             let decimals = mint_decimals(leg_mint)?;
-            let amount = leg_amount(net, leg.qty_per_unit)?;
+            let amount = leg_amount(net, leg.qty_per_unit, Rounding::Down)?;
             token_interface::transfer_checked(
                 CpiContext::new_with_signer(
                     tp.to_account_info(),
@@ -188,8 +188,16 @@ pub mod bundle {
     }
 }
 
-fn leg_amount(units: u64, qty_per_unit: u64) -> Result<u64> {
-    let v = (units as u128) * (qty_per_unit as u128) / UNIT;
+/// Rounds in the pool's favor both ways: issue takes the ceiling, redeem pays the
+/// floor, so the vaults always cover every unit outstanding.
+enum Rounding { Up, Down }
+
+fn leg_amount(units: u64, qty_per_unit: u64, rounding: Rounding) -> Result<u64> {
+    let exact = (units as u128) * (qty_per_unit as u128);
+    let v = match rounding {
+        Rounding::Up => exact.div_ceil(UNIT),
+        Rounding::Down => exact / UNIT,
+    };
     u64::try_from(v).map_err(|_| error!(BundleError::Overflow))
 }
 
