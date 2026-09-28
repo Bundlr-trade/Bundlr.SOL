@@ -42,11 +42,23 @@ This repo holds one Solana program, `programs/bundle` (`create_bundle`, `issue`,
    gh secret set DEPLOYER_KEYPAIR -R <org>/<repo> < .keys/deployer-keypair.json
    ```
 
-   Add both before step 5. Without them the run fails at the keypair step, before it builds anything.
+   Add both before step 5. Without them the workflow still builds and tests the program but skips the deploy.
 
 5. **Push the address change to `main`.** Any push that touches `programs/**`, `Anchor.toml`, `Cargo.toml` or the workflow starts `.github/workflows/program.yml`. To re-run it without a change: `gh workflow run program.yml -R <org>/<repo>`, or Actions → program → Run workflow.
 
-6. **Check the result.** The run takes about 10 minutes. Its summary page shows the program address, whether it deployed, and explorer links. After deploying, the same job creates mock stock tokens on devnet (`devnet/setup-mocks.ts`) and runs an end-to-end create → issue → redeem (`devnet/e2e.ts`). A green run with "Deployed this run: true" means the program works on devnet.
+6. **Check the result.** The run takes about 10 minutes. The tests (below) must pass before it deploys. Its summary page shows the program address, whether it deployed, and explorer links. After deploying, the same job creates mock stock tokens on devnet (`devnet/setup-mocks.ts`) and runs an end-to-end create → issue → redeem (`devnet/e2e.ts`). A green run with "Deployed this run: true" means the program works on devnet.
+
+## Tests
+
+`tests/bundle.test.ts` runs the compiled program inside LiteSVM, an in-process Solana VM, so it needs no network, faucet or keys. It covers `create_bundle` validation, `issue` and `redeem` balances, the 10 bps fee, permissionless redeem, rejected account swaps (wrong leg order, fake vault, fake bundle mint, fee sent elsewhere), the `faucet`, and the backing invariant: after any sequence of issues and redeems, every vault holds at least `units outstanding × qty_per_unit`.
+
+CI runs them on every build. Locally, with `target/deploy/bundle.so` from `anchor build` or the CI artifact (`gh run download -n bundle-program-artifacts -D target`):
+
+```sh
+cd devnet && bun install && cd ../tests && bun install && bun test
+```
+
+Rounding: `issue` rounds each leg's deposit **up** and `redeem` rounds each payout **down**, so rounding always favors the vault. (Before 2026-09-28, `issue` rounded down, and a tiny issue could mint units backed by zero of a leg.)
 
 ## Who controls the program
 
