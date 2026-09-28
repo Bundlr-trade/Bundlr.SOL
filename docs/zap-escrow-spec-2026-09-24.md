@@ -99,3 +99,41 @@ A five-leg buy: one signature, two to four transactions cranked by the relayer, 
 1. Confirm Jupiter's `shared_accounts_route` accepts a PDA `user_transfer_authority` by CPI with the current v6 program and that a single-leg CPI fits the 1 232-byte limit with lookup tables for the deepest xStocks routes.
 2. Whether `finish_issue` should call `bundle.issue` with the escrow as buyer (as written) or transfer legs to the buyer first and have the buyer's delegate sign; the first keeps the buyer's wallet out of the fill path entirely and is preferred.
 3. The fee default (decision 2) and the relayer allowlist (decision 6) are Jon's calls; the defaults above stand until he says otherwise.
+
+## If I were building it (handoff note, 2026-09-28)
+
+*Jon stepped away from Bundlr on 2026-09-27. Everything above is the design as it stood. This section is the order I'd build it in, what I'd skip, and what code alone can't fix. Wherever the spec says "Jon's wallet" or "Jon's call", read it as the new owner.*
+
+### Build order
+
+1. **Answer "Open before code" #1 first, before writing `fill`.** The whole design rests on Jupiter accepting a PDA as `user_transfer_authority` over CPI, with one leg fitting in a transaction. Prove it on a mainnet fork (`surfpool`, or `solana-test-validator` with the Jupiter program and a few xStock pools cloned) using a throwaway program that does nothing but one CPI swap. If it doesn't fit, the design changes (e.g. the relayer swaps and deposits into the escrow), so find out in a day, not after a week of escrow code.
+2. **A mock router program.** It moves tokens at a fixed price and has the same account shape as a Jupiter swap instruction. Every escrow test runs against it, locally and on devnet.
+3. **Buy side only: `open_issue`, `fill`, `finish_issue`, `cancel_issue`, plus the controls** (`set_cap`, `set_paused`, `set_fee_bps`, `set_pauser`, `transfer_owner`). Test it the way `tests/` tests the bundle program: LiteSVM, the compiled `.so`, one test per rule in the Zap v2 test list under Testing. The bundle program and its test suite are the template.
+4. **Mainnet-fork tests with real routes** at $100, $1 000 and $10 000 on the launch bundles.
+5. **Audit, then mainnet at the $500 cap**, with the upgrade authority on a multisig, never a hot key.
+
+### What to skip for v1
+
+- **Sell to cash (`open_redeem` / `unwind` / `finish_redeem`).** `bundle.redeem` already gives holders their tokens back without permission, and they can sell those anywhere. Cash-out is a convenience; build it after buy works.
+- **Kalshi legs.** They need a DFlow production key, KYC on every order, and a `closed` state for resolved markets. Launch with bundles whose legs Jupiter can route: crypto, gold, xStocks.
+- **Ondo GM legs.** Blocked until Ondo whitelists the vault and escrow PDAs. Nothing to build until they say yes.
+- **Packing several steps into one transaction.** Ship `open`, one `fill` per transaction, then `finish`. Packing is an optimization and needs no program change.
+- **The relayer allowlist.** Leave `relayer_allowlist_on` false and add it only if griefing actually happens.
+
+### Sizing gotchas from the bundle program as it is now
+
+- `bundle.issue(units)` mints `units − fee` to the buyer (10 bps, rounded down) and the fee to the curator. To hand the buyer exactly N units, the escrow has to issue `ceil(N × 10 000 / 9 990)`. Size the legs off that number, not N.
+- Since 2026-09-28 `issue` pulls `ceil(units × qty_per_unit / 10^6)` of each leg. `finish_issue` must check each escrow leg balance against that rounded-up figure, or `issue` will fail on the last base unit.
+- xStocks carry a dividend multiplier (Token-2022 scaled UI amount). Neither the bundle program nor the API reads it, so "shares per unit" drifts from what's actually in the vault. Decide whether recipes are denominated in raw base units (what the program does today) or in shares, and make the quote side match before mainnet.
+
+### What code can't fix
+
+- **Backed's permanent delegate.** Every xStock mint checked has one, so Backed can move tokens out of the vaults and escrows. That's issuer risk. Disclose it; don't try to code around it.
+- **Transfer hooks.** xStocks have an empty hook slot that Backed can turn on at any time. Neither `bundle` nor the Zap passes the extra accounts a hook needs, so turning one on would break every xStock issue, redeem and fill. Supporting hooks means resolving the hook's extra accounts at call time; plan for it before mainnet.
+- **An audit.** The Zap holds buyers' cash between transactions. It shouldn't touch real money without one.
+
+### Also fix in `bundle` before mainnet (from the 2026-09-27 audit)
+
+- Gate `faucet` behind a devnet-only build feature so it can't ship to mainnet.
+- Check in `create_bundle` that each leg mint actually exists.
+- Burn the upgrade authority after the audit, as decision 10 and "What stays true" already say.
